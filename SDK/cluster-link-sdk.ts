@@ -50,24 +50,63 @@ export class ClusterLinkSDK {
 
     async copyMainnetAccounts(
         accounts: PublicKey[],
-    ) {
+    ): Promise<Keypair[]> {
         let infos = await ClusterLinkSDK.customGetMultipleAccountInfos(this.mainConnection, accounts);
         let promises = [];
+        let copiedAccounts = [];
         for(let i=0; i<accounts.length; i++){
             let accountinfo = infos[i];
             let u8array = Uint8Array.from(accountinfo.account.data);
+            let copiedAccount = Keypair.generate();
+            copiedAccounts.push(copiedAccount);
             promises.push(
                 this.program.methods.initialize(
                     new BN(u8array.length),
                     new BN(accountinfo.account.lamports),
                 ).accounts({
                     signer: this.wallet.publicKey,
-                    account: accountinfo.publicKey,
+                    account: copiedAccount.publicKey,
                     systemProgram: SystemProgram.programId,
-                }).rpc()
+                }).signers(
+                    [copiedAccount]
+                ).rpc()
             );
         }
-        return await Promise.all(promises);
+        await Promise.all(promises);
+        promises = [];
+        for(let i=0; i<accounts.length; i++){
+            let accountinfo = infos[i];
+            let u8array = Uint8Array.from(accountinfo.account.data);
+            let copiedAccount = copiedAccounts[i];
+            let index = 0;
+            while(index < u8array.length){
+                let current: Uint8Array;
+                if(index + 1024 < u8array.length)
+                    current = u8array.slice(index, index + 1024);
+                else
+                    current = u8array.slice(index, u8array.length);
+                let cur: number[] = [];
+                for(let j=0; j<current.length; j++)cur.push(current[i]);
+                promises.push(
+                await this.program.methods.fill(
+                    new BN(index),
+                    new BN(index + current.length),
+                    cur,
+                ).accounts({
+                    signer: this.wallet.publicKey,
+                    account: copiedAccount.publicKey,
+                    systemProgram: SystemProgram.programId,
+                }).signers(
+                    [copiedAccount]
+                ).rpc()
+                );
+                index += 1024;
+            }
+        }
+
+        await Promise.all(promises);
+
+        return copiedAccounts;
     }
 
     static async customGetMultipleAccountInfos(
